@@ -56,6 +56,7 @@ class DataGenenerator(Sequence):
                  batch_size=32, shuffle=True, augmentation=None,
                  resized_height=224, resized_width=224, num_channels=3):
         self.batch_size = batch_size
+
         self.shuffle = shuffle
         self.augmentation = augmentation
         if images_list is None:
