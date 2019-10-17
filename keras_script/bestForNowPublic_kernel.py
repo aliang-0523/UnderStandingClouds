@@ -15,9 +15,9 @@ from tqdm import tqdm_notebook as tqdm
 from numpy.random import seed
 seed(10)
 from tensorflow import set_random_seed
-from script.dataloader import DataGenenerator
-from script.callback import PrAucCallback
-from script.model import get_model
+from keras_script.dataloader import DataGenenerator
+from keras_script.callback import PrAucCallback
+from keras_script.model import get_model
 set_random_seed(10)
 
 test_imgs_folder = '../../../understandingclouds_data/test_images/'
@@ -82,31 +82,31 @@ history_1 = model.fit_generator(generator=data_generator_train,
                                 verbose=1,
                                 initial_epoch=1
                                 )
-def plot_with_dots(ax,np_array):
-    ax.scatter(list(range(1, len(np_array) + 1)), np_array, s=50)
-    ax.plot(list(range(1, len(np_array) + 1)), np_array)
-pr_auc_history_train = train_metric_callback.get_pr_auc_history()
-pr_auc_history_val = val_callback.get_pr_auc_history()
-
-plt.figure(figsize=(10, 7))
-plot_with_dots(plt, pr_auc_history_train[-1])
-plot_with_dots(plt, pr_auc_history_val[-1])
-
-plt.xlabel('Epoch', fontsize=15)
-plt.ylabel('Mean PR AUC', fontsize=15)
-plt.legend(['Train', 'Val'])
-plt.title('Training and Validation PR AUC', fontsize=20)
-plt.savefig('pr_auc_hist.png')
-
-plt.figure(figsize=(10, 7))
-plot_with_dots(plt, history_0.history['loss']+history_1.history['loss'])
-plot_with_dots(plt, history_0.history['val_loss']+history_1.history['val_loss'])
-
-plt.xlabel('Epoch', fontsize=15)
-plt.ylabel('Binary Crossentropy', fontsize=15)
-plt.legend(['Train', 'Val'])
-plt.title('Training and Validation Loss', fontsize=20)
-plt.savefig('loss_hist.png')
+# def plot_with_dots(ax,np_array):
+#     ax.scatter(list(range(1, len(np_array) + 1)), np_array, s=50)
+#     ax.plot(list(range(1, len(np_array) + 1)), np_array)
+# pr_auc_history_train = train_metric_callback.get_pr_auc_history()
+# pr_auc_history_val = val_callback.get_pr_auc_history()
+#
+# plt.figure(figsize=(10, 7))
+# plot_with_dots(plt, pr_auc_history_train[-1])
+# plot_with_dots(plt, pr_auc_history_val[-1])
+#
+# plt.xlabel('Epoch', fontsize=15)
+# plt.ylabel('Mean PR AUC', fontsize=15)
+# plt.legend(['Train', 'Val'])
+# plt.title('Training and Validation PR AUC', fontsize=20)
+# plt.savefig('pr_auc_hist.png')
+#
+# plt.figure(figsize=(10, 7))
+# plot_with_dots(plt, history_0.history['loss']+history_1.history['loss'])
+# plot_with_dots(plt, history_0.history['val_loss']+history_1.history['val_loss'])
+#
+# plt.xlabel('Epoch', fontsize=15)
+# plt.ylabel('Binary Crossentropy', fontsize=15)
+# plt.legend(['Train', 'Val'])
+# plt.title('Training and Validation Loss', fontsize=20)
+# plt.savefig('loss_hist.png')
 
 class_names = ['Fish', 'Flower', 'Sugar', 'Gravel']
 

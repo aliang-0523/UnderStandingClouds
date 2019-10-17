@@ -12,3 +12,8 @@ dice = 2∗|X∩Y|/(|X|+|Y|)
 ### 缩放
 
 预测的编码应该与每边缩放0.25的图像相对应。换言之，虽然训练和测试中的图像为1400 x 2100像素，但预测应缩小到350 x 525像素的图像。为了达到合理的提交评估时间，需要减少提交评估时间。
+
+***********************************************************
+## 整理了几个比较好的kernel  
+- [使用efficientNetB4进行图片数据训练但是预训练模型未公开,将efficientnet输出转接到unet进行分割任务](https://www.kaggle.com/jpbremer/efficient-net-b4-unet-clouds/notebook)  
+- [使用Resnet进行encode,使用unet进行decode(本次提交修复了数据增强包中没有torch.To_Tensor的问题,直接使用作者之前写好的to_tensor)](https://www.kaggle.com/artgor/segmentation-in-pytorch-using-convenient-tools)
