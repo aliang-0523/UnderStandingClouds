@@ -148,12 +148,17 @@ mask_count_df.sort_values('hasMask', ascending=False, inplace=True)
 print(mask_count_df.shape)
 mask_count_df.head()
 
+train_imgs, val_imgs = train_test_split(train_df['ImageId'].values,
+                                        test_size=0.1,
+                                        stratify=train_df['ClassId'].map(lambda x: str(sorted(list(x)))),
+                                        random_state=2019)
+
 sub_df = pd.read_csv('../sample_submission.csv')
 sub_df['ImageId'] = sub_df['Image_Label'].apply(lambda x: x.split('_')[0])
 test_imgs = pd.DataFrame(sub_df['ImageId'].unique(), columns=['ImageId'])
 
 class DataGenerator(keras.utils.Sequence):
-    def __init__(self,list_IDs,df,target_df=None,mode='fit',base_path='../../understandingclouds_data/train_images',batch_size=32,dim=(1400,2100),n_channels=3,reshape=None,gamma=None,augment=False,n_classes=4,random_state=2019,shuffle=True):
+    def __init__(self,list_IDs,df,target_df=None,mode='fit',base_path='../../understandingclouds_data/train_images',batch_size=4,dim=(1400,2100),n_channels=3,reshape=None,gamma=None,augment=False,n_classes=4,random_state=2019,shuffle=True):
         self.dim=dim
         self.batch_size=batch_size
         self.df=df
@@ -336,8 +341,8 @@ from keras_radam import RAdam
 model.compile(optimizer=RAdam(warmup_proportion=0.1, min_lr=1e-5), loss='categorical_crossentropy',
               metrics=['accuracy'])
 train_generator=DataGenerator(
-    list_IDs=list(range(len(mask_count_df))),
-    df=train_df,
+    list_IDs=list(range(len(train_imgs))),
+    df=train_df[train_df['ImageId']==train_imgs],
     shuffle=False,
     mode='fit',
     dim=(350,525),
@@ -349,9 +354,24 @@ train_generator=DataGenerator(
     batch_size=32,
     n_classes=4
 )
+valid_generator=DataGenerator(
+    list_IDs=list(range(len(val_imgs))),
+    df=train_df[train_df['ImageId']==val_imgs],
+    shuffle=False,
+    mode='fit',
+    dim=(350,525),
+    reshape=(320,480),
+    gamma=0.8,
+    n_channels=3,
+    base_path='../../understandingclouds_data/train_images',
+    target_df=train_df,
+    batch_size=4,
+    n_classes=4
+)
 import multiprocessing
 num_cores=multiprocessing.cpu_count()
 history_0 = model.fit_generator(generator=train_generator,
+                                validation_data=valid_generator,
                                 epochs=20,
                                 workers=num_cores,
                                 verbose=1
@@ -375,7 +395,7 @@ for i in range(0, test_imgs.shape[0], subsize):
         n_channels=3,
         base_path='../input/understanding_cloud_organization/test_images',
         target_df=sub_df,
-        batch_size=1,
+        batch_size=4,
         n_classes=4
     )
     batch_pred_masks = model.predict_generator(
