@@ -388,8 +388,6 @@ kfold=KFold(n_splits=n_splits,random_state=2019)
 train_idx, val_idx = train_test_split(
     mask_count_df.index, random_state=2019, test_size=0.1
 )
-
-
 import gc
 gc.collect()
 
@@ -439,9 +437,9 @@ for i,(train_indx,valid_idx) in enumerate(kfold.split(mask_count_df.index)):
     model.compile(optimizer=opt, loss=bce_dice_loss, metrics=[dice_coef])
     #model.load_weights('./densenet169_model.h5')
     checkpoint = ModelCheckpoint('model.h5', save_best_only=True)
-    es = EarlyStopping(monitor='val_dice_coef', min_delta=0.0001, patience=5, verbose=1, mode='max',
+    es = EarlyStopping(monitor='val_dice_coef', min_delta=0.001, patience=5, verbose=1, mode='max',
                        restore_best_weights=True)
-    rlr = ReduceLROnPlateau(monitor='val_dice_coef', factor=0.2, patience=2, verbose=1, mode='max', min_delta=0.0001)
+    rlr = ReduceLROnPlateau(monitor='val_dice_coef', factor=0.2, patience=2, verbose=1, mode='max', min_delta=0.001)
     history = model.fit_generator(
         train_generator,
         validation_data=val_generator,
@@ -449,7 +447,6 @@ for i,(train_indx,valid_idx) in enumerate(kfold.split(mask_count_df.index)):
         epochs=30,
         verbose=1,
     )
-
     model = tta_segmentation(model, h_flip=True, h_shift=(-10, 10), merge='mean')
     for i in range(0, test_imgs.shape[0], TEST_BATCH_SIZE):
         batch_idx = list(
@@ -469,7 +466,7 @@ for i,(train_indx,valid_idx) in enumerate(kfold.split(mask_count_df.index)):
             batch_size=1,
             n_classes=4
         )
-        gc.collect()
+
         batch_pred_masks = model.predict_generator(
             test_generator,
             workers=1,
@@ -486,6 +483,7 @@ for i,(train_indx,valid_idx) in enumerate(kfold.split(mask_count_df.index)):
         except Exception as e:
             print('Unable to save data to', pickle_file, ':', e)
             raise
+    gc.collect()
 '''
 # Predict out put shape is (320X480X4)
 # 4  = 4 classes, Fish, Flower, Gravel Surger.
