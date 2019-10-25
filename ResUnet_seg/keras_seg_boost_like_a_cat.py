@@ -455,7 +455,6 @@ for i,(train_indx,valid_idx) in enumerate(kfold.split(mask_count_df.index)):
         batch_idx = list(
             range(i, min(test_imgs.shape[0], i + TEST_BATCH_SIZE))
         )
-
         test_generator = DataGenerator(
             batch_idx,
             df=test_imgs,
