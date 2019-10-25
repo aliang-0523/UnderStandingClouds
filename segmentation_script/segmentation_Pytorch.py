@@ -38,8 +38,8 @@ from catalyst.dl import utils
 from catalyst.data.reader import ImageReader, ScalarReader, ReaderCompose, LambdaReader
 from catalyst.dl.runner import SupervisedRunner
 from catalyst.contrib.models.segmentation import Unet
-from catalyst.dl.callbacks import DiceCallback, EarlyStoppingCallback, InferCallback, CheckpointCallback
-
+from catalyst.dl.callbacks import DiceCallback, EarlyStoppingCallback, InferCallback, CheckpointCallback,OptimizerCallback
+import time
 import segmentation_models_pytorch as smp
 
 
@@ -264,7 +264,7 @@ sub['im_id'] = sub['Image_Label'].apply(lambda x: x.split('_')[0])
 
 id_mask_count = train.loc[train['EncodedPixels'].isnull() == False, 'Image_Label'].apply(lambda x: x.split('_')[0]).value_counts().\
 reset_index().rename(columns={'index': 'img_id', 'Image_Label': 'count'})
-train_ids, valid_ids = train_test_split(id_mask_count['img_id'].values, random_state=42, stratify=id_mask_count['count'], test_size=0.1)
+train_ids, valid_ids = train_test_split(id_mask_count['img_id'].values, random_state=42, stratify=id_mask_count['count'], test_size=0.2)
 test_ids = sub['Image_Label'].apply(lambda x: x.split('_')[0]).drop_duplicates().values
 
 class CloudDataset(Dataset):
@@ -301,17 +301,12 @@ class CloudDataset(Dataset):
 ENCODER = 'resnet50'
 ENCODER_WEIGHTS = 'imagenet'
 DEVICE = 'cuda'
-ENCODERS={'vgg11':'imagenet','vgg13':'imagenet','vgg16':'imagenet','vgg19':'imagenet','vgg11bn':'imagenet',\
-          'vgg13bn':'imagenet','vgg16bn':'imagenet','vgg19bn':'imagenet','densenet121':'imagenet',\
-          'densenet169':'imagenet','densenet201':'imagenet','densenet161':'imagenet','dpn68':'imagenet+5k',\
-          'dpn68b':'imagenet','dpn92':'imagenet','dpn98':'imagenet+5k','dpn107':'imagenet+5k','dpn131':'imagenet',\
-          'inceptionresnetv2':'imagenet','resnet18':'imagenet','resnet34':'imagenet','resnet50':'imagenet','resnet101':'imagenet',\
-          'resnet152':'imagenet','se_resnet50':'imagenet','se_resnet101':'imagenet','se_resnet152':'imagenet',\
-          'se_resnext50_32×4d':'imagenet','se_resnext101_32×4d':'imagenet'
-          }
+ENCODERS={'resnet50':'imagenet'}
+
 ACTIVATION = None
+from sklearn.model_selection import KFold
 for i,keys in enumerate(ENCODERS):
-    model = smp.Unet(
+    model=smp.Unet(
         encoder_name=keys,
         encoder_weights=ENCODERS[keys],
         classes=4,
@@ -323,142 +318,155 @@ for i,keys in enumerate(ENCODERS):
         model.cuda(0)
     num_workers = 0
     bs = 4
-    train_dataset = CloudDataset(df=train, datatype='train', img_ids=train_ids, transforms = get_training_augmentation(), preprocessing=get_preprocessing(preprocessing_fn))
-    valid_dataset = CloudDataset(df=train, datatype='valid', img_ids=valid_ids, transforms = get_validation_augmentation(), preprocessing=get_preprocessing(preprocessing_fn))
+    n_splits=5
+    kfold=KFold(n_splits=n_splits,random_state=2019)
+    for i,(train_ids,valid_ids) in enumerate(kfold.split(id_mask_count)):
+        train_dataset = CloudDataset(df=train, datatype='train', img_ids=np.array(id_mask_count.loc[train_ids,'img_id']), transforms = get_training_augmentation(), preprocessing=get_preprocessing(preprocessing_fn))
+        valid_dataset = CloudDataset(df=train, datatype='valid', img_ids=np.array(id_mask_count.loc[valid_ids,'img_id']), transforms = get_validation_augmentation(), preprocessing=get_preprocessing(preprocessing_fn))
 
-    train_loader = DataLoader(train_dataset, batch_size=bs, shuffle=True, num_workers=num_workers)
-    valid_loader = DataLoader(valid_dataset, batch_size=bs, shuffle=False, num_workers=num_workers)
+        train_loader = DataLoader(train_dataset, batch_size=bs, shuffle=True, num_workers=num_workers)
+        valid_loader = DataLoader(valid_dataset, batch_size=bs, shuffle=False, num_workers=num_workers)
 
-    loaders = {
-        "train": train_loader,
-        "valid": valid_loader
-    }
+        loaders = {
+            "train": train_loader,
+            "valid": valid_loader
+        }
 
-    num_epochs = 19
-    logdir = "./logs/segmentation"
+        num_epochs = 19
+        logdir = "./logs/segmentation"
 
-    # model, criterion, optimizer
-    optimizer = torch.optim.Adam([
-        {'params': model.decoder.parameters(), 'lr': 1e-2},
-        {'params': model.encoder.parameters(), 'lr': 1e-3},
-    ])
-    scheduler = ReduceLROnPlateau(optimizer, factor=0.15, patience=2)
-    criterion = smp.utils.losses.BCEDiceLoss(eps=1.)
-    runner = SupervisedRunner()
+        # model, criterion, optimizer
+        optimizer = torch.optim.Adam([
+            {'params': model.decoder.parameters(), 'lr': 1e-2},
+            {'params': model.encoder.parameters(), 'lr': 1e-3},
+        ])
+        scheduler = ReduceLROnPlateau(optimizer, factor=0.15, patience=2)
+        criterion = smp.utils.losses.BCEDiceLoss(eps=1.)
+        runner = SupervisedRunner()
+        start = time.clock()
+        runner.train(
+            model=model,
+            criterion=criterion,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            loaders=loaders,
+            callbacks=[DiceCallback(), EarlyStoppingCallback(patience=5, min_delta=0.001)],
+            logdir=logdir,
+            num_epochs=num_epochs,
+            verbose=True
+        )
+        first_train = time.clock()
+        print('train_time',str(first_train-start))
+        encoded_pixels = []
+        loaders = {"infer": valid_loader}
+        runner.infer(
+            model=model,
+            loaders=loaders,
+            callbacks=[
+                CheckpointCallback(
+                    resume=f"{logdir}/checkpoints/best.pth"),
+                InferCallback()
+            ],
+        )
+        infer_time=time.clock()
+        print('infer_time',str(infer_time-first_train))
+        valid_masks = []
+        probabilities = np.zeros((2220, 350, 525))
+        for i, (batch, output) in enumerate(tqdm.tqdm(zip(
+                valid_dataset, runner.callbacks[0].predictions["logits"]))):
+            image, mask = batch
+            for m in mask:
+                if m.shape != (350, 525):
+                    m = cv2.resize(m, dsize=(525, 350), interpolation=cv2.INTER_LINEAR)
+                valid_masks.append(m)
 
-    runner.train(
-        model=model,
-        criterion=criterion,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        loaders=loaders,
-        callbacks=[DiceCallback(), EarlyStoppingCallback(patience=5, min_delta=0.001)],
-        logdir=logdir,
-        num_epochs=num_epochs,
-        verbose=True
-    )
-
-    encoded_pixels = []
-    loaders = {"infer": valid_loader}
-    runner.infer(
-        model=model,
-        loaders=loaders,
-        callbacks=[
-            CheckpointCallback(
-                resume=f"{logdir}/checkpoints/best.pth"),
-            InferCallback()
-        ],
-    )
-    valid_masks = []
-    probabilities = np.zeros((2220, 350, 525))
-    for i, (batch, output) in enumerate(tqdm.tqdm(zip(
-            valid_dataset, runner.callbacks[0].predictions["logits"]))):
-        image, mask = batch
-        for m in mask:
-            if m.shape != (350, 525):
-                m = cv2.resize(m, dsize=(525, 350), interpolation=cv2.INTER_LINEAR)
-            valid_masks.append(m)
-
-        for j, probability in enumerate(output):
-            if probability.shape != (350, 525):
-                probability = cv2.resize(probability, dsize=(525, 350), interpolation=cv2.INTER_LINEAR)
-            probabilities[i * 4 + j, :, :] = probability
-
-    class_params = {}
-    for class_id in range(4):
-        print(class_id)
-        attempts = []
-        for t in range(0, 100, 5):
-            t /= 100
-            for ms in [0, 100, 1200, 5000, 10000]:
-                masks = []
-                for i in range(class_id, len(probabilities), 4):
-                    probability = probabilities[i]
-                    predict, num_predict = post_process(sigmoid(probability), t, ms)
-                    masks.append(predict)
-
-                d = []
-                for i, j in zip(masks, valid_masks[class_id::4]):
-                    if (i.sum() == 0) & (j.sum() == 0):
-                        d.append(1)
-                    else:
-                        d.append(dice(i, j))
-
-                attempts.append((t, ms, np.mean(d)))
-
-        attempts_df = pd.DataFrame(attempts, columns=['threshold', 'size', 'dice'])
-
-        attempts_df = attempts_df.sort_values('dice', ascending=False)
-        print(attempts_df.head())
-        best_threshold = attempts_df['threshold'].values[0]
-        best_size = attempts_df['size'].values[0]
-
-        class_params[class_id] = (best_threshold, best_size)
-
-    for i, (input, output) in enumerate(zip(
-            valid_dataset, runner.callbacks[0].predictions["logits"])):
-        image, mask = input
-
-        image_vis = image.transpose(1, 2, 0)
-        mask = mask.astype('uint8').transpose(1, 2, 0)
-        pr_mask = np.zeros((350, 525, 4))
-        for j in range(4):
-            probability = cv2.resize(output.transpose(1, 2, 0)[:, :, j], dsize=(525, 350), interpolation=cv2.INTER_LINEAR)
-            pr_mask[:, :, j], _ = post_process(sigmoid(probability), class_params[j][0], class_params[j][1])
-        # pr_mask = (sigmoid(output) > best_threshold).astype('uint8').transpose(1, 2, 0)
-
-        visualize_with_raw(image=image_vis, mask=pr_mask, original_image=image_vis, original_mask=mask, raw_image=image_vis,
-                           raw_mask=output.transpose(1, 2, 0))
-
-        if i >= 2:
-            break
-
-    import gc
-    torch.cuda.empty_cache()
-    gc.collect()
-
-    test_dataset = CloudDataset(df=sub, datatype='test', img_ids=test_ids, transforms = get_validation_augmentation(), preprocessing=get_preprocessing(preprocessing_fn))
-    test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False, num_workers=0)
-
-    loaders = {"test": test_loader}
-
-    encoded_pixels = []
-    image_id = 0
-    for i, test_batch in enumerate(tqdm.tqdm(loaders['test'])):
-        runner_out = runner.predict_batch({"features": test_batch[0].cuda()})['logits']
-        for i, batch in enumerate(runner_out):
-            for probability in batch:
-
-                probability = probability.cpu().detach().numpy()
+            for j, probability in enumerate(output):
                 if probability.shape != (350, 525):
                     probability = cv2.resize(probability, dsize=(525, 350), interpolation=cv2.INTER_LINEAR)
-                predict, num_predict = post_process(sigmoid(probability), class_params[image_id % 4][0],
-                                                    class_params[image_id % 4][1])
-                if num_predict == 0:
-                    encoded_pixels.append('')
-                else:
-                    r = mask2rle(predict)
-                    encoded_pixels.append(r)
-                image_id += 1
-    sub['EncodedPixels'] = encoded_pixels
-    sub.to_csv('submission+{data}.csv'.format(data=keys), columns=['Image_Label', 'EncodedPixels'], index=False)
+                probabilities[i * 4 + j, :, :] = probability
+        print('first time validation is done')
+        valid_time=time.clock()
+        print('valid_time',str(valid_time-infer_time))
+        class_params = {}
+        for class_id in range(4):
+            print(class_id)
+            attempts = []
+            for t in range(0, 100, 5):
+                t /= 100
+                for ms in [0, 100, 1200, 5000, 10000]:
+                    masks = []
+                    for i in range(class_id, len(probabilities), 4):
+                        probability = probabilities[i]
+                        predict, num_predict = post_process(sigmoid(probability), t, ms)
+                        masks.append(predict)
+
+                    d = []
+                    for i, j in zip(masks, valid_masks[class_id::4]):
+                        if (i.sum() == 0) & (j.sum() == 0):
+                            d.append(1)
+                        else:
+                            d.append(dice(i, j))
+
+                    attempts.append((t, ms, np.mean(d)))
+
+            attempts_df = pd.DataFrame(attempts, columns=['threshold', 'size', 'dice'])
+
+            attempts_df = attempts_df.sort_values('dice', ascending=False)
+            print(attempts_df.head())
+            best_threshold = attempts_df['threshold'].values[0]
+            best_size = attempts_df['size'].values[0]
+
+            class_params[class_id] = (best_threshold, best_size)
+
+        for i, (input, output) in enumerate(zip(
+                valid_dataset, runner.callbacks[0].predictions["logits"])):
+            image, mask = input
+
+            image_vis = image.transpose(1, 2, 0)
+            mask = mask.astype('uint8').transpose(1, 2, 0)
+            pr_mask = np.zeros((350, 525, 4))
+            for j in range(4):
+                probability = cv2.resize(output.transpose(1, 2, 0)[:, :, j], dsize=(525, 350), interpolation=cv2.INTER_LINEAR)
+                pr_mask[:, :, j], _ = post_process(sigmoid(probability), class_params[j][0], class_params[j][1])
+            # pr_mask = (sigmoid(output) > best_threshold).astype('uint8').transpose(1, 2, 0)
+
+            visualize_with_raw(image=image_vis, mask=pr_mask, original_image=image_vis, original_mask=mask, raw_image=image_vis,
+                               raw_mask=output.transpose(1, 2, 0))
+
+            if i >= 2:
+                break
+        valid_time2=time.clock()
+        print('valid_time2',str(valid_time2-valid_time))
+        print('second validation time is done')
+        import gc
+        torch.cuda.empty_cache()
+        gc.collect()
+
+        test_dataset = CloudDataset(df=sub, datatype='test', img_ids=test_ids, transforms = get_validation_augmentation(), preprocessing=get_preprocessing(preprocessing_fn))
+        test_loader = DataLoader(test_dataset, batch_size=4, shuffle=False, num_workers=0)
+
+        loaders = {"test": test_loader}
+
+        encoded_pixels = []
+        image_id = 0
+        test_probability=runner.predict_loader(loaders['test'])
+        for i, test_batch in enumerate(tqdm.tqdm(loaders['test'])):
+            runner_out = runner.predict_batch({"features": test_batch[0].cuda()})['logits']
+            for j, batch in enumerate(runner_out):
+                for probability in batch:
+
+                    probability = probability.cpu().detach().numpy()
+                    if probability.shape != (350, 525):
+                        probability = cv2.resize(probability, dsize=(525, 350), interpolation=cv2.INTER_LINEAR)
+                    predict, num_predict = post_process(sigmoid(probability), class_params[image_id % 4][0],
+                                                        class_params[image_id % 4][1])
+                    if num_predict == 0:
+                        encoded_pixels.append('')
+                    else:
+                        r = mask2rle(predict)
+                        encoded_pixels.append(r)
+                    image_id += 1
+            sub['EncodedPixels'] = encoded_pixels
+            sub.to_csv(f'submission+{model}.csv', columns=['Image_Label', 'EncodedPixels'], index=False)
+            test_time=time.clock()
+            print('test_time',str(test_time-valid_time2))
