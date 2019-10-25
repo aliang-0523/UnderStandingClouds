@@ -20,11 +20,11 @@ from keras_script.callback import PrAucCallback
 from keras_script.model import get_model
 set_random_seed(10)
 
-test_imgs_folder = '../../../understandingclouds_data/test_images/'
-train_imgs_folder = '../../../understandingclouds_data/train_images/'
+test_imgs_folder = '../../understandingclouds_data/test_images/'
+train_imgs_folder = '../../understandingclouds_data/train_images/'
 num_cores = multiprocessing.cpu_count()
 #读取数据
-train_df = pd.read_csv('../../../understandingclouds_data/train/train.csv')
+train_df = pd.read_csv('../../understandingclouds_data/train/train.csv')
 #将原始数据转化为列为[image,class,fish,flower,suger,gravel]的dataFrame
 train_df = train_df[~train_df['EncodedPixels'].isnull()]
 train_df['Image'] = train_df['Image_Label'].map(lambda x: x.split('_')[0])
@@ -71,7 +71,8 @@ history_0 = model.fit_generator(generator=data_generator_train,
                                 )
 for base_layer in model.layers[:-3]:
     base_layer.trainable = True
-
+import gc
+gc.collect()
 model.compile(optimizer=RAdam(warmup_proportion=0.1, min_lr=1e-5), loss='categorical_crossentropy',
               metrics=['accuracy'])
 history_1 = model.fit_generator(generator=data_generator_train,
@@ -160,7 +161,7 @@ for i, (img, predictions) in enumerate(zip(os.listdir(test_imgs_folder), y_pred_
         if predictions[class_i] < recall_thresholds[class_name]:
             image_labels_empty.add(f'{img}_{class_name}')
 
-submission = pd.read_csv('../input/densenet201cloudy/densenet201.csv')
+submission = pd.read_csv('../blend/densenet169_batch_10.csv')
 submission.head()
 
 predictions_nonempty = set(submission.loc[~submission['EncodedPixels'].isnull(), 'Image_Label'].values)

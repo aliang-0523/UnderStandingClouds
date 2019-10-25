@@ -11,7 +11,7 @@ import random
 import numpy as np
 import cv2
 class DataGenenerator(Sequence):
-    def __init__(self, img_2_ohe_vector,images_list=None, folder_imgs='../../../understandingclouds_data/train_images/',
+    def __init__(self, img_2_ohe_vector,images_list=None, folder_imgs='../../understandingclouds_data/train_images/',
                  batch_size=32, shuffle=True, augmentation=None,
                  resized_height=224, resized_width=224, num_channels=3):
         self.batch_size = batch_size

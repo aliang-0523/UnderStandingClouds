@@ -30,7 +30,7 @@ def bce_dice_loss(y_true, y_pred):
 import efficientnet.keras as efn
 def get_model():
     K.clear_session()
-    base_model =  efn.EfficientNetB2(weights='imagenet', include_top=False, pooling='avg', input_shape=(260, 260, 3))
+    base_model =  efn.EfficientNetB2(weights='imagenet', include_top=False, pooling='avg', input_shape=(224, 224, 3))
     x = base_model.output
     y_pred = Dense(4, activation='sigmoid')(x)
     return Model(inputs=base_model.input, outputs=y_pred)
