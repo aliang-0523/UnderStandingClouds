@@ -433,6 +433,7 @@ for i,keys in enumerate(ENCODERS):
             visualize_with_raw(image=image_vis, mask=pr_mask, original_image=image_vis, original_mask=mask, raw_image=image_vis,
                                raw_mask=output.transpose(1, 2, 0))
 
+
             if i >= 2:
                 break
         valid_time2=time.clock()
