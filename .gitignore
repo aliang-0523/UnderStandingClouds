@@ -3,3 +3,4 @@
 *.csv
 *.h5
 .idea/
+logs/
