@@ -28,9 +28,10 @@ def bce_dice_loss(y_true, y_pred):
     return binary_crossentropy(y_true, y_pred) + dice_loss(y_true, y_pred)
 
 import efficientnet.keras as efn
-def get_model():
+def get_model(EfficientNet):
     K.clear_session()
-    base_model =  efn.EfficientNetB2(weights='imagenet', include_top=False, pooling='avg', input_shape=(224, 224, 3))
+    dic={'EfficientNetB5':efn.EfficientNetB5(weights='imagenet', include_top=False, pooling='avg', input_shape=(224, 224, 3)),'EfficientNetB4':efn.EfficientNetB4(weights='imagenet', include_top=False, pooling='avg', input_shape=(224, 224, 3))}
+    base_model =  dic[EfficientNet]
     x = base_model.output
     y_pred = Dense(4, activation='sigmoid')(x)
     return Model(inputs=base_model.input, outputs=y_pred)

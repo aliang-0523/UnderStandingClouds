@@ -35,5 +35,15 @@ dice = 2∗|X∩Y|/(|X|+|Y|)
 -- densenet121:0.643(batch_size=4)————kernel效果 densenet121:0.650(batch_size=16)
 -- densenet169:0.642(batch_size=4)————kernel效果 densenet169:0.653(batch_size=10)
 -- densenet201:0.638(batch_size=2)————kernel效果 densenet201:0.649(batch_size=10)
--- resnet18:(batch_size=)
--- efficientnetb2:0.6(batch_size=)————kernel效果 efficientnetb2:0.648(batch_size=16)
+-- resnet18:(batch_size=)————kernel效果 resnet18:0.640(batch_size=32 accumulate_iter=32)
+-- efficientnetb2:(batch_size=)————kernel效果 efficientnetb2:0.648(batch_size=16)
+-- efficientnetb3:(batch_size=)————kernel效果 efficientnetb3:0.651(batch_size=10)(修改了loss为dice_loss以及dice_coef作为metrics)
+## 多分类模型ensemble:
+-- 
+## 多模型ensemble:
+
+-- se_resnext50_32x4d unet(weight:imagenet)
+-- efficientnet-b5 unet(weight:imagenet)
+-- efficientnet-b5 fpn(weight:imagenet)
+-- efficientnet-b5 fpn(weight:imagenet 训练了较多批次)
+-- se_resnext50_32x4d fpn(weight:imagenet) 0.635(batch-16)

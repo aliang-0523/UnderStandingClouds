@@ -1,15 +1,16 @@
 #!/usr/bin/env python
 #-*- coding:utf-8 -*-
 # author:sunjian
-# datetime:2019/10/23 下午8:18
+# datetime:2019/10/29 下午9:50
 # software: PyCharm
-import pandas as pd
-import glob
+import torch.nn as nn
+from torch.autograd import Variable
+import torch
 import numpy as np
 import cv2
-import math
-sample_submission=pd.read_csv('../sample_submission.csv')
-#preds=np.zeros((len(sample_submission),320,480,4),dtype=np.float32)
+import glob
+import pandas as pd
+from tqdm import tqdm
 def np_resize(img, input_shape):
     """
     Reshape a numpy array, which is input_shape=(height, width),
@@ -24,6 +25,8 @@ def mask2rle(img):
     img: numpy array, 1 - mask, 0 - background
     Returns run length as string formated
     '''
+    if len(img.shape)==0:
+        return np.nan
     pixels = img.T.flatten()
     pixels = np.concatenate([[0], pixels, [0]])
     runs = np.where(pixels[1:] != pixels[:-1])[0] + 1
@@ -65,8 +68,6 @@ def build_masks(rles, input_shape, reshape=None):
                 masks[:, :, i] = reshaped_mask
 
     return masks
-
-
 def build_rles(masks, reshape=None):
     width, height, depth = masks.shape
 
@@ -83,33 +84,29 @@ def build_rles(masks, reshape=None):
         rles.append(rle)
 
     return rles
-all_files=glob.glob('../blend/*.csv')
-def get_csv(all_files):
-    csvs=[]
-    for file in all_files:
-        csvs.append(pd.read_csv(file))
-    for file in csvs:
-        file['ImageId'] = file['Image_Label'].apply(lambda x: x.split('_')[0])
-    test_imgs = pd.DataFrame(csvs[0]['ImageId'].unique(), columns=['ImageId'])
-    test_batch_size=23
-    encoded_pixels=[]
-    for j in range(0,test_imgs.shape[0],test_batch_size):
-        batch_index=range(j, min(test_imgs.shape[0], j + test_batch_size))
-        y = np.empty(((len(batch_index),350,525, 4)), dtype=float)
-        for file in csvs:
-            for i, ID in enumerate(file.loc[batch_index,'ImageId']):
-                rles = file[file['ImageId'] == ID]['EncodedPixels'].values
-                for k,rle in enumerate(rles):
-                    if type(rle) is str:
-                        mask = rle2mask(rle, input_shape=[350,525])
-                        y[i,:,:,k] = y[i,:,:,k]+mask/len(csvs)
-        y[y>0.5]=1
-        y[y<=0.5]=0
-        for i in range(len(y)):
-            for k in range(len(y[0,0,0])):
-                r = mask2rle(y[i,:,:,k])
-                encoded_pixels.append(r)
-    csvs[0]['EncodedPixels']=encoded_pixels
-    return csvs[0]
-final=get_csv(all_files)
-final[['Image_Label','EncodedPixels']].to_csv('../submission.csv',index=False)
+def __generate_y(train_df,target_df,list_IDs_batch):
+    y = np.empty(((1400,2100,4)), dtype=int)
+    for i, ID in enumerate(list_IDs_batch):
+        im_name = train_df['ImageId'].iloc[ID]
+        image_df =target_df[target_df['ImageId'] == im_name]
+        rles = image_df['EncodedPixels'].values
+        masks = build_masks(rles, input_shape=(1400,2100))
+        y[i,] = masks
+    return y
+all_files=glob.glob('*.csv')
+subs=[pd.read_csv(file) for file in all_files]
+sample_submission=pd.read_csv('../sample_submission.csv')
+for i,pixel in tqdm(enumerate(subs[0]['EncodedPixels'])):
+    mask=np.nan
+    masks=[rle2mask(str(sub.loc[i,'EncodedPixels']),(1400,2100)) if sub.loc[i,'EncodedPixels'] is not np.nan else None for sub in subs]
+    nan_num=np.sum([True if mask is None else False for mask in masks])
+    first=True
+    if nan_num>=2:
+        mask=np.nan
+    elif nan_num==0:
+        mask=masks[0]+masks[1]
+        mask=np.floor(mask/2)
+    mask=np.array(mask)
+    rle=mask2rle(mask)
+    sample_submission.loc[i,'EncodedPixels']=mask2rle(mask)
+sample_submission.to_csv('../submission.csv',index=False)

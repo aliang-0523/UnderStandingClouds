@@ -29,6 +29,8 @@ from keras.legacy import interfaces
 from keras.optimizers import Optimizer
 from sklearn.model_selection import KFold
 import pickle
+import gc
+
 class AdamAccumulate(Optimizer):
     def __init__(self, lr=0.001, beta_1=0.9, beta_2=0.999,epsilon=None, decay=0., amsgrad=False, accum_iters=1, **kwargs):
         if accum_iters < 1:
@@ -221,24 +223,24 @@ def build_rles(masks, reshape=None):
         rles.append(rle)
 
     return rles
-#dice part
-def dice_coef(y_true, y_pred, smooth=1):
+#dice part remove smooth,change dice_coef and mean dice_coef(Monday 14.05)
+def dice_coef(y_true, y_pred):
     y_true_f = K.flatten(y_true)
     y_pred_f = K.flatten(y_pred)
     intersection = K.sum(y_true_f * y_pred_f)
-    return (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
+    if (K.sum(y_true)==0) and(K.sum(y_pred)==0):
+        return 1
+    return (2. * intersection ) / (K.sum(y_true_f) + K.sum(y_pred_f))
 
 def dice_loss(y_true, y_pred):
-    smooth = 1.
     y_true_f = K.flatten(y_true)
     y_pred_f = K.flatten(y_pred)
     intersection = y_true_f * y_pred_f
-    score = (2. * K.sum(intersection) + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
+    score = (2. * K.sum(intersection) ) / (K.sum(y_true_f) + K.sum(y_pred_f))
     return 1. - score
 
 def bce_dice_loss(y_true, y_pred):
-    return binary_crossentropy(y_true, y_pred) + dice_loss(y_true, y_pred)
-
+    return 0.6*binary_crossentropy(y_true, y_pred) + 0.4*dice_loss(y_true, y_pred)
 
 class DataGenerator(keras.utils.Sequence):
     'Generates data for Keras'
@@ -363,9 +365,12 @@ class DataGenerator(keras.utils.Sequence):
 
     def __random_transform(self, img, masks):
         composition = albu.Compose([
-            albu.HorizontalFlip(),
+            albu.HorizontalFlip(p=0.5),
             albu.VerticalFlip(),
-            albu.ShiftScaleRotate(rotate_limit=30, shift_limit=0.1)
+            albu.OpticalDistortion(p=1, distort_limit=2, shift_limit=0.5),
+            albu.ShiftScaleRotate(rotate_limit=30, shift_limit=0.1),
+            albu.GridDistortion(p=0.5),
+            albu.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
         ])
 
         composed = composition(image=img, mask=masks)
@@ -383,133 +388,100 @@ class DataGenerator(keras.utils.Sequence):
 BATCH_SIZE = 4
 n_splits=5
 kfold=KFold(n_splits=n_splits,random_state=2019)
-
-
 train_idx, val_idx = train_test_split(
     mask_count_df.index, random_state=2019, test_size=0.1
 )
-import gc
-gc.collect()
 
 from tta_wrapper import tta_segmentation
 best_threshold = 0.45
 best_size = 15000
 
-threshold = best_threshold
-min_size = best_size
 encoded_pixels = []
-TEST_BATCH_SIZE = 200
-for i,(train_indx,valid_idx) in enumerate(kfold.split(mask_count_df.index)):
-    predict_total = np.zeros((test_imgs.shape[0], 320, 480, 4), dtype=np.float16)
-    train_generator = DataGenerator(
-        train_idx,
-        df=mask_count_df,
-        target_df=train_df,
-        batch_size=BATCH_SIZE,
-        reshape=(320, 480),
-        gamma=0.9,
-        augment=True,
-        n_channels=3,
-        n_classes=4,
-        shuffle=False
-    )
+TEST_BATCH_SIZE = 500
 
-    val_generator = DataGenerator(
-        val_idx,
-        df=mask_count_df,
-        target_df=train_df,
-        batch_size=BATCH_SIZE,
-        reshape=(320, 480),
-        gamma=0.9,
-        augment=False,
-        n_channels=3,
-        n_classes=4,
-        shuffle=False
-    )
+train_generator = DataGenerator(
+    train_idx,
+    df=mask_count_df,
+    target_df=train_df,
+    batch_size=BATCH_SIZE,
+    reshape=(320, 480),
+    gamma=0.8,
+    augment=True,
+    n_channels=3,
+    n_classes=4,
+    shuffle=False
+)
 
-    opt = AdamAccumulate(lr=0.002, accum_iters=16)
-    model = sm.Unet(
-        'densenet169',
-        classes=4,
-        input_shape=(320, 480, 3),
-        activation='sigmoid'
-    )
-    model.compile(optimizer=opt, loss=bce_dice_loss, metrics=[dice_coef])
-    #model.load_weights('./densenet169_model.h5')
-    checkpoint = ModelCheckpoint('model.h5', save_best_only=True)
-    es = EarlyStopping(monitor='val_dice_coef', min_delta=0.001, patience=5, verbose=1, mode='max',
-                       restore_best_weights=True)
-    rlr = ReduceLROnPlateau(monitor='val_dice_coef', factor=0.2, patience=2, verbose=1, mode='max', min_delta=0.001)
-    history = model.fit_generator(
-        train_generator,
-        validation_data=val_generator,
-        callbacks=[checkpoint, rlr, es],
-        epochs=30,
-        verbose=1,
-    )
-    model = tta_segmentation(model, h_flip=True, h_shift=(-10, 10), merge='mean')
-    for i in range(0, test_imgs.shape[0], TEST_BATCH_SIZE):
-        batch_idx = list(
-            range(i, min(test_imgs.shape[0], i + TEST_BATCH_SIZE))
-        )
-        test_generator = DataGenerator(
-            batch_idx,
-            df=test_imgs,
-            shuffle=False,
-            mode='predict',
-            dim=(350, 525),
-            reshape=(320, 480),
-            n_channels=3,
-            gamma=0.9,
-            base_path='../../understandingclouds_data/test_images',
-            target_df=sub_df,
-            batch_size=1,
-            n_classes=4
-        )
+val_generator = DataGenerator(
+    val_idx,
+    df=mask_count_df,
+    target_df=train_df,
+    batch_size=BATCH_SIZE,
+    reshape=(320, 480),
+    gamma=0.8,
+    augment=False,
+    n_channels=3,
+    n_classes=4,
+    shuffle=False
+)
 
-        batch_pred_masks = model.predict_generator(
-            test_generator,
-            workers=1,
-            verbose=1
-        )
-        predict_total[batch_idx,]=batch_pred_masks/5
-        gc.collect()
-    # 保存数据方便调用
-    pickle_file = f'batch{i}.pickle'
-    if not os.path.isfile(pickle_file):  # 判断是否存在此文件，若无则存储
-        try:
-            with open(pickle_file, 'wb') as pfile:
-                pickle.dump(predict_total,pfile)
-        except Exception as e:
-            print('Unable to save data to', pickle_file, ':', e)
-            raise
-    gc.collect()
-'''
-# Predict out put shape is (320X480X4)
-# 4  = 4 classes, Fish, Flower, Gravel Surger.
-predict_total = np.zeros((test_imgs.shape[0], 320, 480, 4), dtype=np.float32)
-for i in range(5):
-    with open(f'batch{i}.pickle','rb') as pfile:
-        predict_total+=pickle.load(pfile)
-print('test_generation_is_done')
+opt = AdamAccumulate(lr=0.002, accum_iters=32)
+model = sm.Unet(
+    'densenet169',
+    classes=4,
+    input_shape=(320, 480, 3),
+    activation='sigmoid',
+)
+model.compile(optimizer=opt, loss=bce_dice_loss, metrics=[dice_coef])
+model.load_weights('../ensemble/densenet169.h5')
+checkpoint = ModelCheckpoint('model.h5', save_best_only=True)
+es = EarlyStopping(monitor='val_dice_coef', min_delta=0.001, patience=5, verbose=1, mode='max',
+                   restore_best_weights=True)
+rlr = ReduceLROnPlateau(monitor='val_dice_coef', factor=0.2, patience=2, verbose=1, mefficientnetb3ode='max', min_delta=0.001)
+# history = model.fit_generator(
+#     train_generator,
+#     validation_data=val_generator,
+#     callbacks=[checkpoint, rlr, es],
+#     epochs=30,
+#     verbose=1,
+# )
+
+model = tta_segmentation(model, h_flip=True, h_shift=(-10, 10), merge='mean')
 for i in range(0, test_imgs.shape[0], TEST_BATCH_SIZE):
     batch_idx = list(
         range(i, min(test_imgs.shape[0], i + TEST_BATCH_SIZE))
     )
+    test_generator = DataGenerator(
+        batch_idx,
+        df=test_imgs,
+        shuffle=False,
+        mode='predict',
+        dim=(350, 525),
+        reshape=(320, 480),
+        n_channels=3,
+        gamma=0.8,
+        base_path='../../understandingclouds_data/test_images',
+        target_df=sub_df,
+        batch_size=1,
+        n_classes=4
+    )
+    batch_pred_masks = model.predict_generator(
+        test_generator,
+        workers=1,
+        verbose=1
+    )
     for j, idx in enumerate(batch_idx):
         filename = test_imgs['ImageId'].iloc[idx]
         image_df = sub_df[sub_df['ImageId'] == filename].copy()
-
         # Batch prediction result set
-        pred_masks = predict_total[idx,]
-
+        pred_masks = batch_pred_masks[j,]
         for k in range(pred_masks.shape[-1]):
             pred_mask = pred_masks[..., k].astype('float32')
 
             if pred_mask.shape != (350, 525):
                 pred_mask = cv2.resize(pred_mask, dsize=(525, 350), interpolation=cv2.INTER_LINEAR)
 
-            pred_mask, num_predict = post_process(pred_mask, threshold, min_size)
+            pred_mask, num_predict = post_process(pred_mask, best_threshold, best_size)
 
             if num_predict == 0:
                 encoded_pixels.append('')
@@ -521,4 +493,3 @@ sub_df['EncodedPixels'] = encoded_pixels
 gc.collect()
 sub_df.to_csv('submission.csv', columns=['Image_Label', 'EncodedPixels'], index=False)
 sub_df.head(10)
-'''
