@@ -15,6 +15,25 @@ import albumentations as albu
 sample_submission=pd.read_csv('../sample_submission.csv')
 import torch
 #preds=np.zeros((len(sample_submission),320,480,4),dtype=np.float32)
+'''
+class Dict(dict):
+    __setattr__ = dict.__setitem__
+    __getattr__ = dict.__getitem__
+
+
+def dict_to_object(dictObj):
+    if not isinstance(dictObj, dict):
+        return dictObj
+    inst = Dict()
+    for k, v in dictObj.items():
+        inst[k] = dict_to_object(v)
+    return inst
+
+dic={'A':[1,2,3],'B':[2,3,4]}
+# 转换字典成为对象，可以用"."方式访问对象属性
+res = dict_to_object(dic)
+print(res.A)
+'''
 def np_resize(img, input_shape):
     """
     Reshape a numpy array, which is input_shape=(height, width),
@@ -250,20 +269,23 @@ TEST_BATCH_SIZE=500
 
 from tta_wrapper import tta_segmentation
 import segmentation_models as sm
-import pickle,os,gc
+import pickle,gc
 sub_df = pd.read_csv('../sample_submission.csv')
 encoded_pixels = []
-best_threshold = 0.3
-best_size = 15000
+best_threshold = 0.59
+best_size = [11000,12000,13000,14000]
 sub_df['ImageId'] = sub_df['Image_Label'].apply(lambda x: x.split('_')[0])
 test_imgs = pd.DataFrame(sub_df['ImageId'].unique(), columns=['ImageId'])
-models={'densenet169':'./densenet169.h5','densenet201':'./densenet201.h5','efficientnetb3':'./efficientnetb3.h5'}
+models={'efficientnetb4_Unt':'./efficientnetb4_Unet.h5','efficientnetb5_Unt':'./efficientnetb5_Unet.h5','efficientnetb5_FPN':'./efficientnetb5_FPN.h5','densenet169_Unt':'./densenet169_Unet.h5'}
 predict_total = np.zeros((test_imgs.shape[0], 320, 480, 4), dtype=np.float16)
-#sigmoid = lambda x: 1 / (1 + np.exp(-x))
 for k,model in enumerate(models):
-    model_=sm.Unet(model,classes=4,input_shape=(320,480,3),activation='sigmoid')
+    if 'FPN' in model:
+        model_=sm.FPN(model[:-4],classes=4,input_shape=(320,480,3),activation='sigmoid')
+    else:
+        model_ = sm.Unet(model[:-4], classes=4, input_shape=(320, 480, 3), activation='sigmoid')
     weights=models.get(model)
     model_.load_weights(models.get(model))
+    #model_ = tta_segmentation(model_, h_flip=True, h_shift=(-10, 10), merge='mean')
     for i in range(0, test_imgs.shape[0], TEST_BATCH_SIZE):
         batch_idx = list(
             range(i, min(test_imgs.shape[0], i + TEST_BATCH_SIZE))
@@ -289,11 +311,10 @@ for k,model in enumerate(models):
             verbose=1
         )
         batch_pred_masks.astype(np.float16)
-        predict_total[batch_idx,]+=batch_pred_masks*0.5/3
+        predict_total[batch_idx,]+=batch_pred_masks/len(models)
         gc.collect()
     # 保存数据方便调用
 print('prediction combination is over')
-
 for i in range(0, test_imgs.shape[0], TEST_BATCH_SIZE):
     batch_idx = list(
         range(i, min(test_imgs.shape[0], i + TEST_BATCH_SIZE))
@@ -311,7 +332,7 @@ for i in range(0, test_imgs.shape[0], TEST_BATCH_SIZE):
             if pred_mask.shape != (350, 525):
                 pred_mask = cv2.resize(pred_mask, dsize=(525, 350), interpolation=cv2.INTER_LINEAR)
 
-            pred_mask, num_predict = post_process(pred_mask, best_threshold, best_size)
+            pred_mask, num_predict = post_process(pred_mask, best_threshold, best_size[i])
 
             if num_predict == 0:
                 encoded_pixels.append('')
