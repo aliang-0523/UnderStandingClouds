@@ -148,8 +148,6 @@ print('mask_count_df shape',mask_count_df.shape)
 sub_df = pd.read_csv('../sample_submission.csv')
 sub_df['ImageId'] = sub_df['Image_Label'].apply(lambda x: x.split('_')[0])
 test_imgs = pd.DataFrame(sub_df['ImageId'].unique(), columns=['ImageId'])
-
-
 def np_resize(img, input_shape):
     """
     Reshape a numpy array, which is input_shape=(height, width),
@@ -367,10 +365,7 @@ class DataGenerator(keras.utils.Sequence):
         composition = albu.Compose([
             albu.HorizontalFlip(p=0.5),
             albu.VerticalFlip(),
-            albu.OpticalDistortion(p=1, distort_limit=2, shift_limit=0.5),
-            albu.ShiftScaleRotate(rotate_limit=30, shift_limit=0.1),
-            albu.GridDistortion(p=0.5),
-            albu.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225))
+            albu.ShiftScaleRotate(rotate_limit=30, shift_limit=0.1)
         ])
 
         composed = composition(image=img, mask=masks)
@@ -386,11 +381,19 @@ class DataGenerator(keras.utils.Sequence):
 
         return img_batch, masks_batch
 BATCH_SIZE = 4
-n_splits=5
-kfold=KFold(n_splits=n_splits,random_state=2019)
+'''
+train_idx=np.load('./0_train.npy')
+val_idx=np.load('./0_val.npy')
+'''
+skf = KFold(n_splits=5, shuffle=True, random_state=2019)
+
+
 train_idx, val_idx = train_test_split(
     mask_count_df.index, random_state=2019, test_size=0.1
 )
+for i,(train_index,val_index) in enumerate(skf.split(mask_count_df.index)):
+    np.save(f'seg_train_{i}',train_index)
+    np.save(f'seg_val_{i}',val_index)
 
 from tta_wrapper import tta_segmentation
 best_threshold = 0.45
@@ -425,26 +428,26 @@ val_generator = DataGenerator(
     shuffle=False
 )
 
-opt = AdamAccumulate(lr=0.002, accum_iters=32)
+opt = AdamAccumulate(lr=0.002, accum_iters=8)
 model = sm.Unet(
-    'densenet169',
+    'efficientnetb2',
     classes=4,
     input_shape=(320, 480, 3),
     activation='sigmoid',
 )
 model.compile(optimizer=opt, loss=bce_dice_loss, metrics=[dice_coef])
-model.load_weights('../ensemble/densenet169.h5')
+#model.load_weights('../ensemble/densenet169.h5')
 checkpoint = ModelCheckpoint('model.h5', save_best_only=True)
 es = EarlyStopping(monitor='val_dice_coef', min_delta=0.001, patience=5, verbose=1, mode='max',
                    restore_best_weights=True)
 rlr = ReduceLROnPlateau(monitor='val_dice_coef', factor=0.2, patience=2, verbose=1, mefficientnetb3ode='max', min_delta=0.001)
-# history = model.fit_generator(
-#     train_generator,
-#     validation_data=val_generator,
-#     callbacks=[checkpoint, rlr, es],
-#     epochs=30,
-#     verbose=1,
-# )
+history = model.fit_generator(
+    train_generator,
+    validation_data=val_generator,
+    callbacks=[checkpoint, rlr, es],
+    epochs=30,
+    verbose=1,
+)
 
 model = tta_segmentation(model, h_flip=True, h_shift=(-10, 10), merge='mean')
 for i in range(0, test_imgs.shape[0], TEST_BATCH_SIZE):

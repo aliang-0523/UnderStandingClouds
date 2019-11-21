@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-#-*- coding:utf-8 -*-
+# -*- coding:utf-8 -*-
 # author:sunjian
 # datetime:2019/10/14 上午10:53
 # software: PyCharm
@@ -13,109 +13,30 @@ from albumentations import Compose, VerticalFlip, HorizontalFlip, Rotate, GridDi
 import matplotlib.pyplot as plt
 from tqdm import tqdm_notebook as tqdm
 from numpy.random import seed
+
 seed(10)
 from tensorflow import set_random_seed
-from classifier.dataloader import DataGenenerator
 from classifier.callback import PrAucCallback
 from classifier.model import get_model
-from keras.optimizers import  Optimizer
+from keras.optimizers import Optimizer
 from keras.legacy import interfaces
 import keras.backend as K
 import efficientnet.keras as efn
-efn.EfficientNetB5
+from copy import deepcopy
+from keras.utils import Sequence
+import os
+import random
+import numpy as np
+import cv2
 set_random_seed(10)
-
-class AdamAccumulate(Optimizer):
-    def __init__(self, lr=0.001, beta_1=0.9, beta_2=0.999,epsilon=None, decay=0., amsgrad=False, accum_iters=1, **kwargs):
-        if accum_iters < 1:
-            raise ValueError('accum_iters must be >= 1')
-        super(AdamAccumulate, self).__init__(**kwargs)
-        with K.name_scope(self.__class__.__name__):
-            self.iterations = K.variable(0, dtype='int64', name='iterations')
-            self.lr = K.variable(lr, name='lr')
-            self.beta_1 = K.variable(beta_1, name='beta_1')
-            self.beta_2 = K.variable(beta_2, name='beta_2')
-            self.decay = K.variable(decay, name='decay')
-        if epsilon is None:
-            epsilon = K.epsilon()
-        self.epsilon = epsilon
-        self.initial_decay = decay
-        self.amsgrad = amsgrad
-        self.accum_iters = K.variable(accum_iters, K.dtype(self.iterations))
-        self.accum_iters_float = K.cast(self.accum_iters, K.floatx())
-    @interfaces.legacy_get_updates_support
-    def get_updates(self, loss, params):
-        grads=self.get_gradients(loss,params)
-        self.updates=[K.update_add(self.iterations,1)]
-        lr=self.lr
-        completed_updates=K.cast(K.tf.floordiv(self.iterations,self.accum_iters),K.floatx())
-        t=completed_updates+1
-        if self.initial_decay>0:
-            lr=lr*(1./(1.+self.decay*completed_updates))
-        lr_t = lr * (K.sqrt(1. - K.pow(self.beta_2, t)) / (1. - K.pow(self.beta_1, t)))
-
-        # self.iterations incremented after processing a batch
-        # batch:              1 2 3 4 5 6 7 8 9
-        # self.iterations:    0 1 2 3 4 5 6 7 8
-        # update_switch = 1:        x       x    (if accum_iters=4)
-        update_switch = K.equal((self.iterations + 1) % self.accum_iters, 0)
-        update_switch = K.cast(update_switch, K.floatx())
-
-        ms = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
-        vs = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
-        gs = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
-
-        if self.amsgrad:
-            vhats = [K.zeros(K.int_shape(p), dtype=K.dtype(p)) for p in params]
-        else:
-            vhats = [K.zeros(1) for _ in params]
-
-        self.weights = [self.iterations] + ms + vs + vhats
-
-        for p, g, m, v, vhat, tg in zip(params, grads, ms, vs, vhats, gs):
-
-            sum_grad = tg + g
-            avg_grad = sum_grad / self.accum_iters_float
-
-            m_t = (self.beta_1 * m) + (1. - self.beta_1) * avg_grad
-            v_t = (self.beta_2 * v) + (1. - self.beta_2) * K.square(avg_grad)
-
-            if self.amsgrad:
-                vhat_t = K.maximum(vhat, v_t)
-                p_t = p - lr_t * m_t / (K.sqrt(vhat_t) + self.epsilon)
-                self.updates.append(K.update(vhat, (1 - update_switch) * vhat + update_switch * vhat_t))
-            else:
-                p_t = p - lr_t * m_t / (K.sqrt(v_t) + self.epsilon)
-
-            self.updates.append(K.update(m, (1 - update_switch) * m + update_switch * m_t))
-            self.updates.append(K.update(v, (1 - update_switch) * v + update_switch * v_t))
-            self.updates.append(K.update(tg, (1 - update_switch) * sum_grad))
-            new_p = p_t
-
-            # Apply constraints.
-            if getattr(p, 'constraint', None) is not None:
-                new_p = p.constraint(new_p)
-
-            self.updates.append(K.update(p, (1 - update_switch) * p + update_switch * new_p))
-        return self.updates
-
-    def get_config(self):
-        config = {'lr': float(K.get_value(self.lr)),
-                  'beta_1': float(K.get_value(self.beta_1)),
-                  'beta_2': float(K.get_value(self.beta_2)),
-                  'decay': float(K.get_value(self.decay)),
-                  'epsilon': self.epsilon,
-                  'amsgrad': self.amsgrad}
-        base_config = super(AdamAccumulate, self).get_config()
-        return dict(list(base_config.items()) + list(config.items()))
-
 
 test_imgs_folder = '../../understandingclouds_data/test_images/'
 train_imgs_folder = '../../understandingclouds_data/train_images/'
+
 num_cores = multiprocessing.cpu_count()
-#读取数据
+# 读取数据
 train_df = pd.read_csv('../../understandingclouds_data/train/train.csv')
-#将原始数据转化为列为[image,class,fish,flower,suger,gravel]的dataFrame吧色_
+# 将原始数据转化为列为[image,class,fish,flower,suger,gravel]的dataFrame吧色_
 train_df = train_df[~train_df['EncodedPixels'].isnull()]
 train_df['Image'] = train_df['Image_Label'].map(lambda x: x.split('_')[0])
 train_df['Class'] = train_df['Image_Label'].map(lambda x: x.split('_')[1])
@@ -123,25 +44,77 @@ classes = train_df['Class'].unique()
 train_df = train_df.groupby('Image')['Class'].agg(set).reset_index()
 for class_name in classes:
     train_df[class_name] = train_df['Class'].map(lambda x: 1 if class_name in x else 0)
-#将图片和
-img_2_ohe_vector = {img:vec for img, vec in zip(train_df['Image'], train_df.iloc[:, 2:].values)}
+# 将图片和
+img_2_ohe_vector = {img: vec for img, vec in zip(train_df['Image'], train_df.iloc[:, 2:].values)}
+class DataGenenerator(Sequence):
+    def __init__(self,images_list=None, folder_imgs='../../understandingclouds_data/train_images/',
+                 batch_size=32, shuffle=True, augmentation=None,
+                 resized_height=260, resized_width=260, num_channels=3):
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.augmentation = augmentation
+        if images_list is None:
+            self.images_list = os.listdir(folder_imgs)
+        else:
+            self.images_list = deepcopy(images_list)
+        self.folder_imgs = folder_imgs
+        self.len = len(self.images_list) // self.batch_size if len(self.images_list)%self.batch_size==0 else len(self.images_list)//self.batch_size+1
+        self.resized_height = resized_height
+        self.resized_width = resized_width
+        self.num_channels = num_channels
+        self.num_classes = 4
+        self.is_test = not 'train' in folder_imgs
+        if not shuffle and not self.is_test:
+            self.labels = [img_2_ohe_vector[img] for img in self.images_list[:self.len * self.batch_size]]
 
-#将图片划分为训练集以及测试集
+    def __len__(self):
+        return self.len
+
+    def on_epoch_start(self):
+        if self.shuffle:
+            random.shuffle(self.images_list)
+
+    def __getitem__(self, idx):
+        current_batch = self.images_list[idx * self.batch_size: (idx + 1) * self.batch_size if (idx+1)*self.batch_size<len(self.images_list) else len(self.images_list)]
+        X = np.empty((len(current_batch), self.resized_height, self.resized_width, self.num_channels))
+        y = np.empty((len(current_batch), self.num_classes))
+
+        for i, image_name in enumerate(current_batch):
+            path = os.path.join(self.folder_imgs, image_name)
+            img = cv2.resize(cv2.imread(path), (self.resized_height, self.resized_width)).astype(np.float32)
+            if not self.augmentation is None:
+                augmented = self.augmentation(image=img)
+                img = augmented['image']
+            X[i, :, :, :] = img / 255.0
+            if not self.is_test:
+                y[i, :] = img_2_ohe_vector[image_name]
+        return X, y
+
+    def get_labels(self):
+        if self.shuffle:
+            images_current = self.images_list[:self.len * self.batch_size]
+            labels = [img_2_ohe_vector[img] for img in images_current]
+        else:
+            labels = self.labels
+        return np.array(labels)
+
+# 将图片划分为训练集以及测试集
 train_imgs, val_imgs = train_test_split(train_df['Image'].values,
-                                        test_size=0.2,
+                                        test_size=0.125,
                                         stratify=train_df['Class'].map(lambda x: str(sorted(list(x)))),
-                                        random_state=10)
-#数据增强
+                                        random_state=2019)
+# 数据增强
 albumentations_train = Compose([
     VerticalFlip(), HorizontalFlip(), Rotate(limit=20), GridDistortion()
 ], p=1)
-#定义训练数据以及验证数据集生成器
-data_generator_train = DataGenenerator(img_2_ohe_vector,train_imgs, augmentation=albumentations_train)
-data_generator_train_eval = DataGenenerator(img_2_ohe_vector,train_imgs, shuffle=False)
-data_generator_val = DataGenenerator(img_2_ohe_vector,val_imgs, shuffle=False)
-
+# 定义训练数据以及验证数据集生成器
+data_generator_train = DataGenenerator(train_imgs, augmentation=albumentations_train)
+data_generator_train_eval = DataGenenerator(train_imgs,shuffle=False)
+data_generator_val = DataGenenerator(val_imgs, shuffle=False)
 train_metric_callback = PrAucCallback(data_generator_train_eval)
 val_callback = PrAucCallback(data_generator_val, stage='val')
+
+
 def get_threshold_for_recall(y_true, y_pred, class_i, recall_threshold=0.94, precision_threshold=0.90, plot=False):
     precision, recall, thresholds = precision_recall_curve(y_true[:, class_i], y_pred[:, class_i])
     i = len(thresholds) - 1
@@ -173,8 +146,10 @@ def get_threshold_for_recall(y_true, y_pred, class_i, recall_threshold=0.94, pre
                     f'Recall {recall_for_prec_thres: .2f} corresponding to selected precision threshold'])
         plt.title(f'Precision-Recall curve for Class {class_names[class_i]}')
     return best_recall_threshold, best_precision_threshold
-y_pred_test=np.zeros((len(os.listdir(test_imgs_folder)),4))
-for test in ['EfficientNetB5','EfficientNetB4']:
+
+
+y_pred_test = np.zeros((len(os.listdir(test_imgs_folder)), 4))
+for test in ['EfficientNetB2', 'EfficientNetB4']:
     model = get_model(test)
 
     from keras_radam import RAdam
@@ -182,8 +157,8 @@ for test in ['EfficientNetB5','EfficientNetB4']:
     for base_layer in model.layers[:-3]:
         base_layer.trainable = False
 
-    model.compile(optimizer=AdamAccumulate(lr=0.002, accum_iters=32), loss='categorical_crossentropy',
-                  metrics=['accuracy'])
+    model.compile(optimizer=RAdam(warmup_proportion=0.1, min_lr=1e-5),
+                  loss='categorical_crossentropy', metrics=['accuracy'])
     history_0 = model.fit_generator(generator=data_generator_train,
                                     validation_data=data_generator_val,
                                     epochs=20,
@@ -194,9 +169,10 @@ for test in ['EfficientNetB5','EfficientNetB4']:
     for base_layer in model.layers[:-3]:
         base_layer.trainable = True
     import gc
+
     gc.collect()
-    model.compile(optimizer=AdamAccumulate(lr=0.002, accum_iters=32), loss='categorical_crossentropy',
-                  metrics=['accuracy'])
+    model.compile(optimizer=RAdam(warmup_proportion=0.1, min_lr=1e-5),
+                  loss='categorical_crossentropy', metrics=['accuracy'])
     history_1 = model.fit_generator(generator=data_generator_train,
                                     validation_data=data_generator_val,
                                     epochs=20,
@@ -206,8 +182,7 @@ for test in ['EfficientNetB5','EfficientNetB4']:
                                     initial_epoch=1
                                     )
     class_names = ['Fish', 'Flower', 'Sugar', 'Gravel']
-
-
+    #model.load_weights('./checkpoints/classifier_densenet169_epoch_3_val_pr_auc_0.6070505384063037.h5')
 
     y_pred = model.predict_generator(data_generator_val, workers=num_cores)
     y_true = data_generator_val.get_labels()
@@ -218,7 +193,9 @@ for test in ['EfficientNetB5','EfficientNetB4']:
                                                                                                    plot=True)
     data_generator_test = DataGenenerator(folder_imgs=test_imgs_folder, shuffle=False)
 
-    y_pred_test+= model.predict_generator(data_generator_test, workers=num_cores)/2
+    y_pred_test += model.predict_generator(data_generator_test, workers=num_cores) / 2
+    del model,data_generator_test,precision_thresholds
+    K.clear_session();gc.collect()
 
 image_labels_empty = set()
 for i, (img, predictions) in enumerate(zip(os.listdir(test_imgs_folder), y_pred_test)):

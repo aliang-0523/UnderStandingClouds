@@ -10,17 +10,13 @@ import time
 import tqdm
 from PIL import Image
 from functools import partial
-
 train_on_gpu = True
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
-
 import torchvision
 import torchvision.transforms as transforms
 import torch
@@ -31,9 +27,7 @@ import torch.optim as optim
 from torch.optim import lr_scheduler
 from torch.utils.data.sampler import SubsetRandomSampler
 from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
-
 import albumentations as albu
-
 from catalyst.data import Augmentor
 from catalyst.dl import utils
 from catalyst.data.reader import ImageReader, ScalarReader, ReaderCompose, LambdaReader
